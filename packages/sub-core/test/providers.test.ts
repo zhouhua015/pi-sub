@@ -7,6 +7,7 @@ import { AntigravityProvider } from "../src/providers/impl/antigravity.js";
 import { CodexProvider } from "../src/providers/impl/codex.js";
 import { KiroProvider } from "../src/providers/impl/kiro.js";
 import { ZaiProvider } from "../src/providers/impl/zai.js";
+import { KimiCodingProvider } from "../src/providers/impl/kimi-coding.js";
 import { createDeps, createJsonResponse, getAuthPath } from "./helpers.js";
 import type { UsageSnapshot } from "../src/types.js";
 
@@ -349,6 +350,88 @@ test("kiro parses credits when percent is missing", async () => {
 
 	const usage = await provider.fetchUsage(deps);
 	assert.equal(Math.round(usage.windows[0]?.usedPercent ?? 0), 15);
+});
+
+test("kimi-coding reads token from KIMI_API_KEY env var", async () => {
+	const provider = new KimiCodingProvider();
+	let authorization: string | undefined;
+
+	const { deps } = createDeps({
+		env: { KIMI_API_KEY: "kimi-token" },
+		fetch: async (_url, init) => {
+			authorization = (init as any)?.headers?.Authorization;
+			return createJsonResponse({
+				usage: { limit: "100", used: "19", remaining: "81", resetTime: "2026-04-24T00:11:57Z" },
+				limits: [
+					{
+						window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" },
+						detail: { limit: "100", used: "3", remaining: "97", resetTime: "2026-04-21T03:11:57Z" },
+					},
+				],
+			});
+		},
+	});
+
+	const usage = await provider.fetchUsage(deps);
+	assert.equal(authorization, "Bearer kimi-token");
+	assertWindow(usage, "5h");
+	assertWindow(usage, "Week");
+	const fiveHour = usage.windows.find((w) => w.label === "5h");
+	const week = usage.windows.find((w) => w.label === "Week");
+	assert.equal(Math.round(fiveHour?.usedPercent ?? 0), 3);
+	assert.equal(Math.round(week?.usedPercent ?? 0), 19);
+});
+
+test("kimi-coding reads token from auth.json", async () => {
+	const provider = new KimiCodingProvider();
+	let authorization: string | undefined;
+
+	const { deps, files } = createDeps({
+		fetch: async (_url, init) => {
+			authorization = (init as any)?.headers?.Authorization;
+			return createJsonResponse({
+				usage: { limit: "100", used: "50", remaining: "50" },
+				limits: [
+					{
+						window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" },
+						detail: { limit: "100", used: "10" },
+					},
+				],
+			});
+		},
+	});
+	files.set(getAuthPath(deps.homedir()), JSON.stringify({ "kimi-coding": { access: "auth-token" } }));
+
+	const usage = await provider.fetchUsage(deps);
+	assert.equal(authorization, "Bearer auth-token");
+	assertWindow(usage, "5h");
+	assertWindow(usage, "Week");
+});
+
+test("kimi-coding shows only weekly usage when limits empty", async () => {
+	const provider = new KimiCodingProvider();
+	const { deps } = createDeps({
+		env: { KIMI_API_KEY: "kimi-token" },
+		fetch: async () =>
+			createJsonResponse({
+				usage: { limit: "100", used: "25", remaining: "75" },
+			}),
+	});
+
+	const usage = await provider.fetchUsage(deps);
+	assertWindow(usage, "Week");
+	assert.equal(Math.round(usage.windows[0]?.usedPercent ?? 0), 25);
+});
+
+test("kimi-coding reports http errors", async () => {
+	const provider = new KimiCodingProvider();
+	const { deps } = createDeps({
+		env: { KIMI_API_KEY: "kimi-token" },
+		fetch: async () => createJsonResponse({}, { ok: false, status: 401 }),
+	});
+
+	const usage = await provider.fetchUsage(deps);
+	assert.equal(usage.error?.code, "HTTP_ERROR");
 });
 
 test("zai reports api errors and parses limits", async () => {

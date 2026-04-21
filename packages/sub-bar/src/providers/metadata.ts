@@ -137,6 +137,14 @@ const zaiWindowVisible: ProviderMetadata["isWindowVisible"] = (_usage, window, s
 	return true;
 };
 
+const kimiCodingWindowVisible: ProviderMetadata["isWindowVisible"] = (_usage, window, settings, _model) => {
+	if (!settings) return true;
+	const ps = settings.providers["kimi-coding"];
+	if (window.label === "5h") return ps.windows.show5h;
+	if (window.label === "Week") return ps.windows.showWeek;
+	return true;
+};
+
 const anthropicExtras: ProviderMetadata["getExtras"] = (usage, settings) => {
 	const extras: UsageExtra[] = [];
 	const showExtraWindow = settings?.providers.anthropic.windows.showExtra ?? true;
@@ -195,5 +203,9 @@ export const PROVIDER_METADATA: Record<ProviderName, ProviderMetadata> = {
 	zai: {
 		...BASE_METADATA.zai,
 		isWindowVisible: zaiWindowVisible,
+	},
+	"kimi-coding": {
+		...BASE_METADATA["kimi-coding"],
+		isWindowVisible: kimiCodingWindowVisible,
 	},
 };
