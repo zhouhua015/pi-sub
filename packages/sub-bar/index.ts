@@ -67,6 +67,15 @@ type PiSettings = {
 	enabledModels?: unknown;
 };
 
+type UsageRenderContext = {
+	cwd: string;
+	model?: {
+		provider: string;
+		id: string;
+	};
+	contextInfo?: ContextInfo;
+};
+
 const AGENT_SETTINGS_ENV = "PI_CODING_AGENT_DIR";
 const DEFAULT_AGENT_DIR = join(homedir(), ".pi", "agent");
 const PROJECT_SETTINGS_DIR = ".pi";
@@ -466,8 +475,21 @@ export default function createExtension(pi: ExtensionAPI) {
 		settingsPoll.unref?.();
 	}
 
+	function captureUsageRenderContext(ctx: ExtensionContext): UsageRenderContext {
+		const ctxUsage = ctx.getContextUsage?.();
+		return {
+			cwd: ctx.cwd,
+			model: ctx.model
+				? { provider: ctx.model.provider, id: ctx.model.id }
+				: undefined,
+			contextInfo: ctxUsage && ctxUsage.contextWindow > 0
+				? { tokens: ctxUsage.tokens, contextWindow: ctxUsage.contextWindow, percent: ctxUsage.percent }
+				: undefined,
+		};
+	}
+
 	function formatUsageContent(
-		ctx: ExtensionContext,
+		renderContext: UsageRenderContext,
 		theme: Theme,
 		usage: UsageSnapshot | undefined,
 		contentWidth: number,
@@ -488,16 +510,11 @@ export default function createExtension(pi: ExtensionAPI) {
 		const wantsSplit = options?.forceNoFill ? false : alignment === "split";
 		const shouldAlign = !hasFill && !wantsSplit && (alignment === "center" || alignment === "right");
 		const baseTextColor = resolveBaseTextColor(settings.display.baseTextColor);
-		const scopedModelPatterns = loadScopedModelPatterns(ctx.cwd);
-		const modelInfo = ctx.model
-			? { provider: ctx.model.provider, id: ctx.model.id, scopedModelPatterns }
+		const scopedModelPatterns = loadScopedModelPatterns(renderContext.cwd);
+		const modelInfo = renderContext.model
+			? { provider: renderContext.model.provider, id: renderContext.model.id, scopedModelPatterns }
 			: { scopedModelPatterns };
-
-		// Get context usage info from pi framework
-		const ctxUsage = ctx.getContextUsage?.();
-		const contextInfo: ContextInfo | undefined = ctxUsage && ctxUsage.contextWindow > 0
-			? { tokens: ctxUsage.tokens, contextWindow: ctxUsage.contextWindow, percent: ctxUsage.percent }
-			: undefined;
+		const contextInfo = renderContext.contextInfo;
 
 		const formatted = message
 			? applyBaseTextColor(theme, baseTextColor, message)
@@ -571,6 +588,7 @@ export default function createExtension(pi: ExtensionAPI) {
 		}
 
 		const placement = settings.display.widgetPlacement ?? "belowEditor";
+		const renderContext = captureUsageRenderContext(ctx);
 
 		if (placement === "status") {
 			ctx.ui.setWidget("usage", undefined);
@@ -584,7 +602,7 @@ export default function createExtension(pi: ExtensionAPI) {
 			// The Pi footer concatenates *all* extension statuses onto one line and then truncates,
 			// so we render at natural width here to avoid padding that would overflow when other
 			// status hooks are present.
-			const lines = formatUsageContent(ctx, theme, usage, terminalWidth, message, {
+			const lines = formatUsageContent(renderContext, theme, usage, terminalWidth, message, {
 				forceNoFill: true,
 				forceLeftAlignment: true,
 				forceOverflow: "truncate",
@@ -628,7 +646,7 @@ export default function createExtension(pi: ExtensionAPI) {
 					const dividerConnect = settings.display.dividerFooterJoin ?? false;
 					const dividerLine = theme.fg(dividerColor, "─".repeat(safeWidth));
 
-					let lines = formatUsageContent(ctx, theme, usage, safeWidth, message);
+					let lines = formatUsageContent(renderContext, theme, usage, safeWidth, message);
 
 					if (showTopDivider) {
 						const baseLine = lines.length > 0 ? lines[0] : "";
@@ -1092,7 +1110,11 @@ export default function createExtension(pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("session_shutdown", async () => {
+	pi.on("session_shutdown", async (_event, ctx) => {
+		if (ctx.hasUI) {
+			ctx.ui.setWidget("usage", undefined);
+			ctx.ui.setStatus("sub-bar", undefined);
+		}
 		lastContext = undefined;
 		if (fetchFailureTimer) {
 			clearInterval(fetchFailureTimer);
